@@ -1,15 +1,15 @@
-use std::fmt::Display;
-
 use annealing::{Annealer, Neighbor, SingleScore};
-use data_structures::FastClearArray;
-use grid::{ConstMap2d, CoordIndex};
+use data_structures::{FastClearArray, IndexSet};
+use grid::{ConnectionChecker, ConstMap2d, CoordIndex};
+use itertools::*;
 use proconio::marker::Chars;
 #[allow(unused_imports)]
 use proconio::*;
 #[allow(unused_imports)]
 use rand::prelude::*;
-use rand_distr::WeightedIndex;
+use rand_distr::{WeightedAliasIndex, WeightedIndex};
 use rand_pcg::Pcg64Mcg;
+use std::fmt::Display;
 
 use crate::grid::{Coord, ADJACENTS};
 
@@ -38,6 +38,7 @@ impl<T: PartialOrd> ChangeMinMax for T {
 struct Input {
     map: ConstMap2d<u32, { Input::N }>,
     graph: ConstMap2d<[Option<CoordIndex>; 4], { Input::N }>,
+    connection_checker: ConnectionChecker,
 }
 
 impl Input {
@@ -80,14 +81,20 @@ impl Input {
             }
         }
 
-        Self { map, graph }
+        let connection_checker = ConnectionChecker::new();
+
+        Self {
+            map,
+            graph,
+            connection_checker,
+        }
     }
 }
 
 fn main() {
     let input = Input::read_input();
     let state = State::new();
-    let neigh_gen = NeighborGenerator;
+    let neigh_gen = NeighborGenerator::new();
     let annealer = Annealer::new(1e6, 1e3, 42, 1024, get_callbacks());
 
     let (state, diagnostics) = annealer.run(&input, state, &neigh_gen, 9.98);
@@ -114,7 +121,8 @@ fn get_callbacks() -> Vec<Box<dyn Fn(&Input, &State, &annealing::AnnealingStatis
 #[derive(Debug, Clone)]
 struct State {
     pieces: Vec<Option<Piece>>,
-    piece_set: Vec<usize>,
+    piece_used: IndexSet,
+    piece_pool: Vec<usize>,
     piece_map: ConstMap2d<Option<usize>, { Input::N }>,
     score: u32,
     visited: FastClearArray,
@@ -126,7 +134,8 @@ impl State {
 
     fn new() -> Self {
         let pieces = vec![None; Self::PIECE_BUFFER_SIZE];
-        let piece_set = (0..Self::PIECE_BUFFER_SIZE).rev().collect();
+        let piece_used = IndexSet::new(Self::PIECE_BUFFER_SIZE);
+        let piece_pool = (0..Self::PIECE_BUFFER_SIZE).rev().collect();
         let piece_map = ConstMap2d::with_default();
         let score = 0;
         let visited = FastClearArray::new(Input::N * Input::N);
@@ -134,7 +143,8 @@ impl State {
 
         Self {
             pieces,
-            piece_set,
+            piece_used,
+            piece_pool,
             piece_map,
             score,
             visited,
@@ -191,7 +201,7 @@ impl RandomBreakBfsNeigh {
             score: 0,
         };
         let remove_index = vec![];
-        let piece_index = state.piece_set.last().copied().unwrap();
+        let piece_index = state.piece_pool.last().copied().unwrap();
 
         Self {
             start,
@@ -274,15 +284,16 @@ impl Neighbor for RandomBreakBfsNeigh {
     }
 
     fn postprocess(&mut self, _env: &Self::Env, state: &mut Self::State) {
-        assert_eq!(state.piece_set.pop().unwrap(), self.piece_index);
+        assert_eq!(state.piece_pool.pop().unwrap(), self.piece_index);
 
         state.score += self.piece.score;
 
         for &i in self.remove_index.iter() {
             let piece = &state.pieces[i].unwrap();
             state.score -= piece.score;
-            state.piece_set.push(i);
+            state.piece_pool.push(i);
             state.pieces[i] = None;
+            state.piece_used.remove(i);
 
             for &c in piece.piece.iter() {
                 state.piece_map[c] = None;
@@ -293,6 +304,7 @@ impl Neighbor for RandomBreakBfsNeigh {
             state.piece_map[c] = Some(self.piece_index);
         }
 
+        state.piece_used.add(self.piece_index);
         state.pieces[self.piece_index] = Some(self.piece);
     }
 
@@ -315,7 +327,7 @@ impl RandomBfsNeigh {
             piece: [CoordIndex(!0); Input::K],
             score: 0,
         };
-        let piece_index = state.piece_set.last().copied().unwrap();
+        let piece_index = state.piece_pool.last().copied().unwrap();
 
         Self {
             start,
@@ -354,7 +366,10 @@ impl Neighbor for RandomBfsNeigh {
             state.visited.set_true(c.0);
 
             for &next in env.graph[c].iter().flatten() {
-                if !state.piece_map[next].is_some() && !state.visited.get(next.0) && !queue.contains(&next) {
+                if !state.piece_map[next].is_some()
+                    && !state.visited.get(next.0)
+                    && !queue.contains(&next)
+                {
                     queue.push(next);
                     weights.push(env.map[next]);
                 }
@@ -388,15 +403,16 @@ impl Neighbor for RandomBfsNeigh {
     }
 
     fn postprocess(&mut self, _env: &Self::Env, state: &mut Self::State) {
-        assert_eq!(state.piece_set.pop().unwrap(), self.piece_index);
+        assert_eq!(state.piece_pool.pop().unwrap(), self.piece_index);
 
         state.score += self.piece.score;
 
         if let Some(i) = self.remove_index {
             let piece = &state.pieces[i].unwrap();
             state.score -= piece.score;
-            state.piece_set.push(i);
+            state.piece_pool.push(i);
             state.pieces[i] = None;
+            state.piece_used.remove(i);
 
             for &c in piece.piece.iter() {
                 state.piece_map[c] = None;
@@ -407,7 +423,125 @@ impl Neighbor for RandomBfsNeigh {
             state.piece_map[c] = Some(self.piece_index);
         }
 
+        state.piece_used.add(self.piece_index);
         state.pieces[self.piece_index] = Some(self.piece);
+    }
+
+    fn rollback(&mut self, _env: &Self::Env, _state: &mut Self::State) {
+        // do nothing
+    }
+}
+
+struct MoveOneNeigh {
+    target_i: usize,
+    remove_i: usize,
+    add_c: CoordIndex,
+    score_diff: i32,
+    other_remove: Option<usize>,
+}
+
+impl MoveOneNeigh {
+    fn gen(input: &Input, state: &mut State, rng: &mut impl Rng) -> Option<Self> {
+        let target_i = *state.piece_used.as_slice().choose(rng)?;
+        let mut order = (0..Input::K).collect_vec();
+        order.shuffle(rng);
+        let piece = state.pieces[target_i].unwrap();
+
+        for remove_i in order {
+            let remove_c = piece.piece[remove_i];
+
+            if input
+                .connection_checker
+                .can_remove(remove_c.to_coord(Input::N), |c| {
+                    c.in_map(Input::N) && state.piece_map[c] == Some(target_i)
+                })
+            {
+                state.visited.clear();
+                for c in piece.piece.iter().copied() {
+                    state.visited.set_true(c.0);
+                }
+
+                let mut candidates = vec![];
+
+                for c in piece.piece.iter().copied() {
+                    if c == remove_c {
+                        continue;
+                    }
+
+                    for &next in input.graph[c].iter().flatten() {
+                        if state.visited.get(next.0) {
+                            continue;
+                        }
+
+                        if input.map[next] > 0 {
+                            candidates.push(next);
+                        }
+
+                        state.visited.set_true(next.0);
+                    }
+                }
+
+                let add_c = *candidates.choose(rng)?;
+                let mut score_diff = (piece.score * input.map[add_c] / input.map[remove_c]) as i32
+                    - piece.score as i32;
+
+                let other_remove = state.piece_map[add_c];
+                if let Some(i) = other_remove {
+                    score_diff -= state.pieces[i].unwrap().score as i32;
+                }
+
+                return Some(Self {
+                    target_i,
+                    remove_i,
+                    add_c,
+                    score_diff,
+                    other_remove,
+                });
+            }
+        }
+
+        None
+    }
+}
+
+impl Neighbor for MoveOneNeigh {
+    type Env = Input;
+    type State = State;
+
+    fn preprocess(&mut self, _env: &Self::Env, _state: &mut Self::State) {
+        // do nothing
+    }
+
+    fn eval(
+        &mut self,
+        _env: &Self::Env,
+        state: &Self::State,
+        _progress: f64,
+        _threshold: f64,
+    ) -> Option<<Self::State as annealing::State>::Score> {
+        let new_score = state.score.wrapping_add_signed(self.score_diff);
+        Some(SingleScore(new_score as i64))
+    }
+
+    fn postprocess(&mut self, env: &Self::Env, state: &mut Self::State) {
+        state.score = state.score.wrapping_add_signed(self.score_diff);
+
+        if let Some(i) = self.other_remove {
+            let piece = &state.pieces[i].unwrap();
+            state.piece_pool.push(i);
+            state.pieces[i] = None;
+            state.piece_used.remove(i);
+
+            for &c in piece.piece.iter() {
+                state.piece_map[c] = None;
+            }
+        }
+
+        let piece = state.pieces[self.target_i].as_mut().unwrap();
+        state.piece_map[piece.piece[self.remove_i]] = None;
+        state.piece_map[self.add_c] = Some(self.target_i);
+        piece.piece[self.remove_i] = self.add_c;
+        *piece = Piece::new(piece.piece, env);
     }
 
     fn rollback(&mut self, _env: &Self::Env, _state: &mut Self::State) {
@@ -433,7 +567,16 @@ impl Piece {
     }
 }
 
-struct NeighborGenerator;
+struct NeighborGenerator {
+    weights: WeightedAliasIndex<u32>,
+}
+
+impl NeighborGenerator {
+    fn new() -> Self {
+        let weights = WeightedAliasIndex::new(vec![90, 5, 5]).unwrap();
+        Self { weights }
+    }
+}
 
 impl annealing::NeighborGenerator for NeighborGenerator {
     type Env = Input;
@@ -442,19 +585,32 @@ impl annealing::NeighborGenerator for NeighborGenerator {
     fn generate(
         &self,
         _env: &Self::Env,
-        state: &Self::State,
+        state: &mut Self::State,
         rng: &mut impl Rng,
     ) -> Box<dyn Neighbor<Env = Self::Env, State = Self::State>> {
-        if rng.gen_bool(0.8) {
-            let row = rng.gen_range(0..Input::N);
-            let col = rng.gen_range(0..Input::N);
-            let start = CoordIndex::new(Coord::new(row, col).to_index(Input::N));
-            Box::new(RandomBreakBfsNeigh::new(state, start))
-        } else {
-            let row = rng.gen_range(0..Input::N);
-            let col = rng.gen_range(0..Input::N);
-            let start = CoordIndex::new(Coord::new(row, col).to_index(Input::N));
-            Box::new(RandomBfsNeigh::new(state, start))
+        loop {
+            let index = self.weights.sample(rng);
+
+            match index {
+                0 => {
+                    if let Some(neigh) = MoveOneNeigh::gen(_env, state, rng) {
+                        return Box::new(neigh);
+                    }
+                }
+                1 => {
+                    let row = rng.gen_range(0..Input::N);
+                    let col = rng.gen_range(0..Input::N);
+                    let start = CoordIndex::new(Coord::new(row, col).to_index(Input::N));
+                    return Box::new(RandomBreakBfsNeigh::new(state, start));
+                }
+                2 => {
+                    let row = rng.gen_range(0..Input::N);
+                    let col = rng.gen_range(0..Input::N);
+                    let start = CoordIndex::new(Coord::new(row, col).to_index(Input::N));
+                    return Box::new(RandomBfsNeigh::new(state, start));
+                }
+                _ => unreachable!(),
+            }
         }
     }
 }
@@ -552,7 +708,7 @@ mod annealing {
         fn generate(
             &self,
             env: &Self::Env,
-            state: &Self::State,
+            state: &mut Self::State,
             rng: &mut impl Rng,
         ) -> Box<dyn Neighbor<Env = Self::Env, State = Self::State>>;
     }
@@ -661,7 +817,7 @@ mod annealing {
                 }
 
                 // 変形
-                let mut neighbor = neighbor_generator.generate(env, &state, &mut rng);
+                let mut neighbor = neighbor_generator.generate(env, &mut state, &mut rng);
                 neighbor.preprocess(env, &mut state);
 
                 // スコア計算
@@ -870,7 +1026,7 @@ mod annealing {
             fn generate(
                 &self,
                 _env: &Self::Env,
-                state: &Self::State,
+                state: &mut Self::State,
                 rng: &mut impl Rng,
             ) -> Box<dyn Neighbor<Env = Self::Env, State = Self::State>> {
                 loop {
@@ -1078,7 +1234,7 @@ mod grid {
             self.col as usize
         }
 
-        pub fn in_map(&self, size: usize) -> bool {
+        pub const fn in_map(&self, size: usize) -> bool {
             self.row < size as u8 && self.col < size as u8
         }
 
@@ -1320,6 +1476,105 @@ mod grid {
             let begin = row * N;
             let end = begin + N;
             &mut self.map[begin..end]
+        }
+    }
+
+    /// 3x3領域のみを見て簡易的に関節点判定を行う構造体
+    ///
+    /// https://speakerdeck.com/shun_pi/ahc023can-jia-ji-zan-ding-ban-shou-shu-kitu-duo-me?slide=18
+    #[derive(Debug, Clone)]
+    pub struct ConnectionChecker {
+        dict: [bool; Self::DICT_SIZE],
+    }
+
+    impl ConnectionChecker {
+        const DICT_SIZE: usize = 1 << 9;
+        const AREA_SIZE: usize = 3;
+        const CENTER_INDEX: usize = 4;
+
+        pub const fn new() -> Self {
+            Self {
+                dict: Self::gen_dict(),
+            }
+        }
+
+        /// coordを削除して良いかどうか、3x3領域のみを見て簡易的に判定する
+        ///
+        /// * `coord` - 削除しようとしている点
+        /// * `f` - 各セルに、注目している要素が入っているかどうかを判定する関数
+        pub fn can_remove(&self, coord: Coord, f: impl Fn(Coord) -> bool) -> bool {
+            assert!(f(coord), "削除しようとしているセルが空です。");
+
+            let mut flag = 0;
+            let mut index = 0;
+
+            for dr in -1..=1 {
+                for dc in -1..=1 {
+                    let diff = CoordDiff::new(dr, dc);
+                    let c = coord + diff;
+                    flag |= (f(c) as usize) << index;
+                    index += 1;
+                }
+            }
+
+            self.dict[flag]
+        }
+
+        const fn gen_dict() -> [bool; Self::DICT_SIZE] {
+            let mut dict = [false; Self::DICT_SIZE];
+            let mut flag = 0;
+
+            while flag < Self::DICT_SIZE {
+                // 3x3マスの中央を除いた後
+                let after_remove = flag & !(1 << Self::CENTER_INDEX);
+                dict[flag] = Self::is_connected(after_remove as u32);
+                flag += 1;
+            }
+
+            dict
+        }
+
+        const fn is_connected(flag: u32) -> bool {
+            const fn dfs(coord: Coord, flag: u32, mut visited: u32) -> u32 {
+                visited |= 1 << coord.to_index(ConnectionChecker::AREA_SIZE);
+                let mut i = 0;
+
+                while i < ADJACENTS.len() {
+                    let adj = ADJACENTS[i];
+                    let next = Coord::new(
+                        coord.row().wrapping_add_signed(adj.dr() as isize),
+                        coord.col().wrapping_add_signed(adj.dc() as isize),
+                    );
+
+                    if next.in_map(ConnectionChecker::AREA_SIZE) {
+                        let bit = 1 << next.to_index(ConnectionChecker::AREA_SIZE);
+
+                        if (visited & bit) == 0 && (flag & bit) > 0 {
+                            visited = dfs(next, flag, visited);
+                        }
+                    }
+
+                    i += 1;
+                }
+
+                visited
+            }
+
+            const fn coord(index: usize) -> Coord {
+                Coord::new(
+                    index / ConnectionChecker::AREA_SIZE,
+                    index % ConnectionChecker::AREA_SIZE,
+                )
+            }
+
+            if flag == 0 {
+                return false;
+            }
+
+            let first_index = flag.trailing_zeros() as usize;
+            let visited = dfs(coord(first_index), flag, 0);
+
+            visited == flag
         }
     }
 
