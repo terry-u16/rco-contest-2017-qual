@@ -10,6 +10,10 @@ edition = "2021"
 rco-contest-2017-qual-a = { alias = "a", problem = "https://atcoder.jp/contests/rco-contest-2017-qual/tasks/rco_contest_2017_qual_a" }
 rco-contest-2017-qual-b = { alias = "b", problem = "https://atcoder.jp/contests/rco-contest-2017-qual/tasks/rco_contest_2017_qual_b" }
 
+[features]
+default = ["local"]
+local = []
+
 [[bin]]
 name = "rco-contest-2017-qual-a"
 path = "src/bin/a.rs"
@@ -32,7 +36,11 @@ ac-library-rs = "=0.1.1"
 #pathfinding = "=4.3.0"
 #recur-fn = "=2.2.0"
 #indexing = { version = "=0.4.1", features = ["experimental_pointer_ranges"] }
-amplify = { version = "=3.14.2", features = ["c_raw", "rand", "stringly_conversions"] }
+amplify = { version = "=3.14.2", features = [
+    "c_raw",
+    "rand",
+    "stringly_conversions",
+] }
 #amplify_derive = "=2.11.3"
 #amplify_num = { version = "=0.4.1", features = ["std"] }
 #easy-ext = "=1.0.1"
@@ -82,6 +90,13 @@ bitset-fixed = "=0.1.0"
 proconio = { version = "=0.4.5", features = ["derive"] }
 #text_io = "=0.1.12"
 rustc-hash = "=1.1.0"
-smallvec = { version = "=1.11.0", features = ["const_generics", "const_new", "write", "union", "serde", "arbitrary"] }
+smallvec = { version = "=1.11.0", features = [
+    "const_generics",
+    "const_new",
+    "write",
+    "union",
+    "serde",
+    "arbitrary",
+] }
 
 [dev-dependencies]

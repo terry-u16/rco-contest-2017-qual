@@ -88,12 +88,27 @@ fn main() {
     let input = Input::read_input();
     let state = State::new();
     let neigh_gen = NeighborGenerator;
-    let annealer = Annealer::new(1e3, 1e-1, 42, 1024);
+    let annealer = Annealer::new(1e6, 1e3, 42, 1024, get_callbacks());
 
-    let (state, diagnostics) = annealer.run(&input, state, &neigh_gen, 9.8);
+    let (state, diagnostics) = annealer.run(&input, state, &neigh_gen, 9.98);
     eprintln!("{}", diagnostics);
-    eprintln!("Score = {}", state.calc_actual_score(&input));
+    eprintln!("Score = {}", state.calc_actual_score());
     println!("{}", state);
+}
+
+fn get_callbacks() -> Vec<Box<dyn Fn(&Input, &State, &annealing::AnnealingStatistics)>> {
+    #[cfg(feature = "local")]
+    {
+        vec![Box::new(|_input, state, diagnostics| {
+            if diagnostics.all_iter % 100000 == 0 {
+                println!("{}", state);
+            }
+        })]
+    }
+    #[cfg(not(feature = "local"))]
+    {
+        vec![]
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -127,7 +142,7 @@ impl State {
         }
     }
 
-    fn calc_actual_score(&self, input: &Input) -> u32 {
+    fn calc_actual_score(&self) -> u32 {
         (self.score + 9999) / 10000
     }
 }
@@ -158,7 +173,7 @@ impl annealing::State for State {
     }
 }
 
-struct RandomBfsNeigh {
+struct RandomBreakBfsNeigh {
     start: CoordIndex,
     piece: Piece,
     piece_index: usize,
@@ -166,7 +181,7 @@ struct RandomBfsNeigh {
     ok: bool,
 }
 
-impl RandomBfsNeigh {
+impl RandomBreakBfsNeigh {
     fn new(state: &State, start: CoordIndex) -> Self {
         let piece = Piece {
             piece: [CoordIndex(!0); Input::K],
@@ -185,7 +200,7 @@ impl RandomBfsNeigh {
     }
 }
 
-impl Neighbor for RandomBfsNeigh {
+impl Neighbor for RandomBreakBfsNeigh {
     type Env = Input;
     type State = State;
 
@@ -282,6 +297,120 @@ impl Neighbor for RandomBfsNeigh {
     }
 }
 
+struct RandomBfsNeigh {
+    start: CoordIndex,
+    piece: Piece,
+    piece_index: usize,
+    remove_index: Option<usize>,
+    ok: bool,
+}
+
+impl RandomBfsNeigh {
+    fn new(state: &State, start: CoordIndex) -> Self {
+        let piece = Piece {
+            piece: [CoordIndex(!0); Input::K],
+            score: 0,
+        };
+        let piece_index = state.piece_set.last().copied().unwrap();
+
+        Self {
+            start,
+            piece,
+            piece_index,
+            remove_index: state.piece_map[start],
+            ok: false,
+        }
+    }
+}
+
+impl Neighbor for RandomBfsNeigh {
+    type Env = Input;
+    type State = State;
+
+    fn preprocess(&mut self, env: &Self::Env, state: &mut Self::State) {
+        state.visited.clear();
+        let mut queue = vec![self.start];
+        let mut weights = vec![env.map[self.start]];
+        let mut piece = [CoordIndex(!0); Input::K];
+
+        for i in 0..Input::K {
+            let Ok(dist) = WeightedIndex::new(&weights) else {
+                return;
+            };
+
+            let index = dist.sample(&mut state.rng);
+            let c = queue.swap_remove(index);
+            _ = weights.swap_remove(index);
+
+            piece[i] = c;
+            state.visited.set_true(c.0);
+
+            for &next in env.graph[c].iter().flatten() {
+                let occupied = state.piece_map[next].is_some();
+                let vis = state.visited.get(next.0);
+                let contains = queue.contains(&next);
+
+                if !occupied && !vis && !contains {
+                    queue.push(next);
+                    weights.push(env.map[next]);
+                }
+            }
+        }
+
+        self.piece = Piece::new(piece, env);
+        self.ok = true;
+    }
+
+    fn eval(
+        &mut self,
+        _env: &Self::Env,
+        state: &Self::State,
+        _progress: f64,
+        _threshold: f64,
+    ) -> Option<<Self::State as annealing::State>::Score> {
+        if !self.ok {
+            return None;
+        }
+
+        let mut score = state.score;
+
+        if let Some(i) = self.remove_index {
+            score -= state.pieces[i].unwrap().score;
+        }
+
+        score += self.piece.score;
+
+        Some(SingleScore(score as i64))
+    }
+
+    fn postprocess(&mut self, _env: &Self::Env, state: &mut Self::State) {
+        assert_eq!(state.piece_set.pop().unwrap(), self.piece_index);
+
+        state.score += self.piece.score;
+
+        if let Some(i) = self.remove_index {
+            let piece = &state.pieces[i].unwrap();
+            state.score -= piece.score;
+            state.piece_set.push(i);
+            state.pieces[i] = None;
+
+            for &c in piece.piece.iter() {
+                state.piece_map[c] = None;
+            }
+        }
+
+        for &c in self.piece.piece.iter() {
+            state.piece_map[c] = Some(self.piece_index);
+        }
+
+        state.pieces[self.piece_index] = Some(self.piece);
+    }
+
+    fn rollback(&mut self, _env: &Self::Env, _state: &mut Self::State) {
+        // do nothing
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Piece {
     piece: [CoordIndex; Input::K],
@@ -312,10 +441,17 @@ impl annealing::NeighborGenerator for NeighborGenerator {
         state: &Self::State,
         rng: &mut impl Rng,
     ) -> Box<dyn Neighbor<Env = Self::Env, State = Self::State>> {
-        let row = rng.gen_range(0..Input::N);
-        let col = rng.gen_range(0..Input::N);
-        let start = CoordIndex::new(Coord::new(row, col).to_index(Input::N));
-        Box::new(RandomBfsNeigh::new(state, start))
+        if rng.gen_bool(0.8) {
+            let row = rng.gen_range(0..Input::N);
+            let col = rng.gen_range(0..Input::N);
+            let start = CoordIndex::new(Coord::new(row, col).to_index(Input::N));
+            Box::new(RandomBreakBfsNeigh::new(state, start))
+        } else {
+            let row = rng.gen_range(0..Input::N);
+            let col = rng.gen_range(0..Input::N);
+            let start = CoordIndex::new(Coord::new(row, col).to_index(Input::N));
+            Box::new(RandomBfsNeigh::new(state, start))
+        }
     }
 }
 
@@ -420,11 +556,11 @@ mod annealing {
     /// 焼きなましの統計データ
     #[derive(Debug, Clone, Copy)]
     pub struct AnnealingStatistics {
-        all_iter: usize,
-        accepted_count: usize,
-        updated_count: usize,
-        init_score: i64,
-        final_score: i64,
+        pub all_iter: usize,
+        pub accepted_count: usize,
+        pub updated_count: usize,
+        pub init_score: i64,
+        pub final_score: i64,
     }
 
     impl AnnealingStatistics {
@@ -452,8 +588,7 @@ mod annealing {
         }
     }
 
-    #[derive(Debug, Clone)]
-    pub struct Annealer {
+    pub struct Annealer<E, S: State<Env = E> + Clone> {
         /// 開始温度
         start_temp: f64,
         /// 終了温度
@@ -462,19 +597,28 @@ mod annealing {
         seed: u128,
         /// 時間計測を行うインターバル
         clock_interval: usize,
+        /// イテレーション開始時に呼ばれるコールバック
+        callbacks: Vec<Box<dyn Fn(&E, &S, &AnnealingStatistics)>>,
     }
 
-    impl Annealer {
-        pub fn new(start_temp: f64, end_temp: f64, seed: u128, clock_interval: usize) -> Self {
+    impl<E, S: State<Env = E> + Clone> Annealer<E, S> {
+        pub fn new(
+            start_temp: f64,
+            end_temp: f64,
+            seed: u128,
+            clock_interval: usize,
+            callbacks: Vec<Box<dyn Fn(&E, &S, &AnnealingStatistics)>>,
+        ) -> Self {
             Self {
                 start_temp,
                 end_temp,
                 seed,
                 clock_interval,
+                callbacks,
             }
         }
 
-        pub fn run<E, S: State<Env = E> + Clone, G: NeighborGenerator<Env = E, State = S>>(
+        pub fn run<G: NeighborGenerator<Env = E, State = S>>(
             &self,
             env: &E,
             mut state: S,
@@ -496,6 +640,10 @@ mod annealing {
             let mut temperature = self.start_temp;
 
             loop {
+                for callback in self.callbacks.iter() {
+                    callback(env, &state, &diagnostics);
+                }
+
                 diagnostics.all_iter += 1;
 
                 if diagnostics.all_iter % self.clock_interval == 0 {
@@ -736,7 +884,7 @@ mod annealing {
         fn annealing_tsp_test() {
             let input = Input::gen_testcase();
             let state = State::new(&input);
-            let annealer = Annealer::new(1e1, 1e-1, 42, 1000);
+            let annealer = Annealer::new(1e1, 1e-1, 42, 1000, vec![]);
             let neighbor_generator = NeighborGenerator;
 
             let (state, diagnostics) = annealer.run(&input, state, &neighbor_generator, 0.1);

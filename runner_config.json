@@ -1,11 +1,11 @@
 {
   "ProblemOption": {
     "ProblemName": "rco-contest-2017-qual",
-    "TimeLimit": "00:00:05"
+    "TimeLimit": "00:00:10"
   },
   "RunnerOption": {
     "StartSeed": 0,
-    "EndSeed": 256,
+    "EndSeed": 128,
     "ReferenceScore": 100000,
     "LocalParallelCount": 16,
     "CloudParallelCount": 300,
