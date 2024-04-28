@@ -173,6 +173,9 @@ impl annealing::State for State {
     }
 }
 
+static mut QUEUE_BUF: Vec<CoordIndex> = Vec::new();
+static mut WEIGHTS_BUF: Vec<u32> = Vec::new();
+
 struct RandomBreakBfsNeigh {
     start: CoordIndex,
     piece: Piece,
@@ -210,12 +213,16 @@ impl Neighbor for RandomBreakBfsNeigh {
         }
 
         state.visited.clear();
-        let mut queue = vec![self.start];
-        let mut weights = vec![env.map[self.start]];
+        let queue = unsafe { &mut QUEUE_BUF };
+        let weights = unsafe { &mut WEIGHTS_BUF };
+        queue.clear();
+        weights.clear();
+        queue.push(self.start);
+        weights.push(env.map[self.start]);
         let mut piece = [CoordIndex(!0); Input::K];
 
         for i in 0..Input::K {
-            let Ok(dist) = WeightedIndex::new(&weights) else {
+            let Ok(dist) = WeightedIndex::new(weights.iter()) else {
                 return;
             };
 
@@ -233,10 +240,7 @@ impl Neighbor for RandomBreakBfsNeigh {
             }
 
             for &next in env.graph[c].iter().flatten() {
-                let vis = state.visited.get(next.0);
-                let contains = queue.contains(&next);
-
-                if !vis && !contains {
+                if !state.visited.get(next.0) && !queue.contains(&next) {
                     queue.push(next);
                     weights.push(env.map[next]);
                 }
@@ -329,12 +333,16 @@ impl Neighbor for RandomBfsNeigh {
 
     fn preprocess(&mut self, env: &Self::Env, state: &mut Self::State) {
         state.visited.clear();
-        let mut queue = vec![self.start];
-        let mut weights = vec![env.map[self.start]];
+        let queue = unsafe { &mut QUEUE_BUF };
+        let weights = unsafe { &mut WEIGHTS_BUF };
+        queue.clear();
+        weights.clear();
+        queue.push(self.start);
+        weights.push(env.map[self.start]);
         let mut piece = [CoordIndex(!0); Input::K];
 
         for i in 0..Input::K {
-            let Ok(dist) = WeightedIndex::new(&weights) else {
+            let Ok(dist) = WeightedIndex::new(weights.iter()) else {
                 return;
             };
 
@@ -346,11 +354,7 @@ impl Neighbor for RandomBfsNeigh {
             state.visited.set_true(c.0);
 
             for &next in env.graph[c].iter().flatten() {
-                let occupied = state.piece_map[next].is_some();
-                let vis = state.visited.get(next.0);
-                let contains = queue.contains(&next);
-
-                if !occupied && !vis && !contains {
+                if !state.piece_map[next].is_some() && !state.visited.get(next.0) && !queue.contains(&next) {
                     queue.push(next);
                     weights.push(env.map[next]);
                 }
