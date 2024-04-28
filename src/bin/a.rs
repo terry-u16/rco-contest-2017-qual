@@ -1,7 +1,6 @@
 use annealing::{Annealer, Neighbor, SingleScore};
 use data_structures::{FastClearArray, IndexSet};
 use grid::{ConnectionChecker, ConstMap2d, CoordIndex};
-use itertools::*;
 use proconio::marker::Chars;
 #[allow(unused_imports)]
 use proconio::*;
@@ -95,7 +94,7 @@ fn main() {
     let input = Input::read_input();
     let state = State::new();
     let neigh_gen = NeighborGenerator::new();
-    let annealer = Annealer::new(1e6, 1e3, 42, 1024, get_callbacks());
+    let annealer = Annealer::new(1e6, 3e3, 42, 1024, get_callbacks());
 
     let (state, diagnostics) = annealer.run(&input, state, &neigh_gen, 9.98);
     eprintln!("{}", diagnostics);
@@ -107,7 +106,7 @@ fn get_callbacks() -> Vec<Box<dyn Fn(&Input, &State, &annealing::AnnealingStatis
     #[cfg(feature = "local")]
     {
         vec![Box::new(|_input, state, diagnostics| {
-            if diagnostics.all_iter % 100000 == 0 {
+            if diagnostics.all_iter % 200000 == 0 {
                 println!("{}", state);
             }
         })]
@@ -443,7 +442,7 @@ struct MoveOneNeigh {
 impl MoveOneNeigh {
     fn gen(input: &Input, state: &mut State, rng: &mut impl Rng) -> Option<Self> {
         let target_i = *state.piece_used.as_slice().choose(rng)?;
-        let mut order = (0..Input::K).collect_vec();
+        let mut order = [0, 1, 2, 3, 4, 5, 6, 7];
         order.shuffle(rng);
         let piece = state.pieces[target_i].unwrap();
 
@@ -456,47 +455,39 @@ impl MoveOneNeigh {
                     c.in_map(Input::N) && state.piece_map[c] == Some(target_i)
                 })
             {
-                state.visited.clear();
-                for c in piece.piece.iter().copied() {
-                    state.visited.set_true(c.0);
-                }
+                let mut order = [0, 1, 2, 3, 4, 5, 6, 7];
+                order.shuffle(rng);
 
-                let mut candidates = vec![];
-
-                for c in piece.piece.iter().copied() {
-                    if c == remove_c {
+                for i in order {
+                    if i == remove_i {
                         continue;
                     }
 
-                    for &next in input.graph[c].iter().flatten() {
-                        if state.visited.get(next.0) {
-                            continue;
-                        }
+                    let c = piece.piece[i];
+                    let mut adj = input.graph[c];
+                    adj.shuffle(rng);
 
-                        if input.map[next] > 0 {
-                            candidates.push(next);
-                        }
+                    for &next in adj.iter().flatten() {
+                        if input.map[next] > 0 && state.piece_map[next] != Some(target_i) {
+                            let mut score_diff =
+                                (piece.score * input.map[next] / input.map[remove_c]) as i32
+                                    - piece.score as i32;
 
-                        state.visited.set_true(next.0);
+                            let other_remove = state.piece_map[next];
+                            if let Some(i) = other_remove {
+                                score_diff -= state.pieces[i].unwrap().score as i32;
+                            }
+
+                            return Some(Self {
+                                target_i,
+                                remove_i,
+                                add_c: next,
+                                score_diff,
+                                other_remove,
+                            });
+                        }
                     }
                 }
-
-                let add_c = *candidates.choose(rng)?;
-                let mut score_diff = (piece.score * input.map[add_c] / input.map[remove_c]) as i32
-                    - piece.score as i32;
-
-                let other_remove = state.piece_map[add_c];
-                if let Some(i) = other_remove {
-                    score_diff -= state.pieces[i].unwrap().score as i32;
-                }
-
-                return Some(Self {
-                    target_i,
-                    remove_i,
-                    add_c,
-                    score_diff,
-                    other_remove,
-                });
             }
         }
 
@@ -573,7 +564,7 @@ struct NeighborGenerator {
 
 impl NeighborGenerator {
     fn new() -> Self {
-        let weights = WeightedAliasIndex::new(vec![90, 5, 5]).unwrap();
+        let weights = WeightedAliasIndex::new(vec![60, 40, 0]).unwrap();
         Self { weights }
     }
 }
