@@ -1,0 +1,46 @@
+{
+  "ProblemOption": {
+    "ProblemName": "rco-contest-2017-qual",
+    "TimeLimit": "00:00:05"
+  },
+  "RunnerOption": {
+    "StartSeed": 0,
+    "EndSeed": 256,
+    "ReferenceScore": 100000,
+    "LocalParallelCount": 16,
+    "CloudParallelCount": 300,
+    "SummaryFilePath": ".\\data\\score_history.txt",
+    "ResultDirectoryPath": ".\\data\\results"
+  },
+  "ExecutionOption": {
+    "ScoreRegex": "^Score = (?<score>\\d+)$",
+    "SeedFormat": "0000",
+    "Timeout": "00:00:30",
+    "LocalExecutionSteps": [
+      {
+        "ExecutionCommand": "rco-contest-2017-qual-a.exe",
+        "StdInPath": "data/inA/{SEED}.txt",
+        "StdOutPath": "data/outA/{SEED}.txt",
+        "StdErrorPath": "data/errA/{SEED}.txt"
+      }
+    ],
+    "CloudExecutionSteps": [
+      {
+        "ExecutionCommand": "tester main",
+        "StdInPath": "in/{SEED}.txt",
+        "StdOutPath": null,
+        "StdErrorPath": null
+      }
+    ],
+    "Files": ["main", "tester", "in/{SEED}.txt"]
+  },
+  "CompileOption": {
+    "ExeName": "main",
+    "Files": [
+      {
+        "Source": "src/bin/a.rs",
+        "Destination": "src/bin/main.rs"
+      }
+    ]
+  }
+}
