@@ -1,0 +1,82 @@
+{
+    // IntelliSense を使用して利用可能な属性を学べます。
+    // 既存の属性の説明をホバーして表示します。
+    // 詳細情報は次を確認してください: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'rco-contest-2017-qual-a'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=rco-contest-2017-qual-a",
+                    "--package=rco-contest-2017-qual"
+                ],
+                "filter": {
+                    "name": "rco-contest-2017-qual-a",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'rco-contest-2017-qual-a'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=rco-contest-2017-qual-a",
+                    "--package=rco-contest-2017-qual"
+                ],
+                "filter": {
+                    "name": "rco-contest-2017-qual-a",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'rco-contest-2017-qual-b'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=rco-contest-2017-qual-b",
+                    "--package=rco-contest-2017-qual"
+                ],
+                "filter": {
+                    "name": "rco-contest-2017-qual-b",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'rco-contest-2017-qual-b'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=rco-contest-2017-qual-b",
+                    "--package=rco-contest-2017-qual"
+                ],
+                "filter": {
+                    "name": "rco-contest-2017-qual-b",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}
